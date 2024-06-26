@@ -15,59 +15,36 @@ mod az_token_sale {
     #[derive(Debug, Clone, scale::Encode, scale::Decode)]
     #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
     pub struct Config {
-        creator: AccountId,
+        admin: AccountId,
         in_crypto: Option<AccountId>,
         out_token: AccountId,
-        amount_for_sale: Balance,
-        amount_available_for_sale: Balance,
-        from_amount: Balance,
-        to_amount: Balance,
-        start_block: BlockNumber,
-        end_block: BlockNumber,
-        lock_up_release_block_frequency: Option<BlockNumber>,
-        lock_up_release_percentage: Option<u8>,
+        in_unit: Balance,
+        out_unit: Balance,
     }
 
     // === CONTRACT ===
     #[ink(storage)]
     pub struct AZTokenSale {
-        creator: AccountId,
+        admin: AccountId,
         in_crypto: Option<AccountId>,
         out_token: AccountId,
-        amount_for_sale: Balance,
-        amount_available_for_sale: Balance,
-        from_amount: Balance,
-        to_amount: Balance,
-        start_block: BlockNumber,
-        end_block: BlockNumber,
-        lock_up_release_block_frequency: Option<BlockNumber>,
-        lock_up_release_percentage: Option<u8>,
+        in_unit: Balance,
+        out_unit: Balance,
     }
     impl AZTokenSale {
         #[ink(constructor)]
         pub fn new(
             in_crypto: Option<AccountId>,
             out_token: AccountId,
-            from_amount: Balance,
-            to_amount: Balance,
-            amount_for_sale: Balance,
-            start_block: BlockNumber,
-            end_block: BlockNumber,
-            lock_up_release_block_frequency: Option<BlockNumber>,
-            lock_up_release_percentage: Option<u8>,
+            in_unit: Balance,
+            out_unit: Balance,
         ) -> Self {
             Self {
-                creator: Self::env().caller(),
+                admin: Self::env().caller(),
                 in_crypto,
                 out_token,
-                amount_for_sale,
-                amount_available_for_sale: 0,
-                from_amount,
-                to_amount,
-                start_block,
-                end_block,
-                lock_up_release_block_frequency,
-                lock_up_release_percentage,
+                in_unit,
+                out_unit,
             }
         }
 
@@ -75,41 +52,40 @@ mod az_token_sale {
         #[ink(message)]
         pub fn config(&self) -> Config {
             Config {
-                creator: self.creator,
+                admin: self.admin,
                 in_crypto: self.in_crypto,
                 out_token: self.out_token,
-                amount_for_sale: self.amount_for_sale,
-                amount_available_for_sale: self.amount_available_for_sale,
-                from_amount: self.from_amount,
-                to_amount: self.to_amount,
-                start_block: self.start_block,
-                end_block: self.end_block,
-                lock_up_release_block_frequency: self.lock_up_release_block_frequency,
-                lock_up_release_percentage: self.lock_up_release_percentage,
+                in_unit: self.in_unit,
+                out_unit: self.out_unit,
             }
         }
 
         // === HANDLES ===
         #[ink(message)]
-        pub fn add_amount_for_sale(&mut self) -> Result<()> {
-            if self.env().block_number() >= self.start_block {
+        pub fn add_amount_for_sale(&mut self, amount: Balance) -> Result<()> {
+            let caller: AccountId = Self::env().caller();
+            Self::authorise(self.admin, caller)?;
+            // validate in amount is in units of in_unit
+            if amount == 0 || amount % self.out_unit > 0 {
                 return Err(AZTokenSaleError::UnprocessableEntity(
-                    "Token sale has already begun.".to_string(),
-                ));
-            }
-            if self.amount_available_for_sale > 0 {
-                return Err(AZTokenSaleError::UnprocessableEntity(
-                    "Sale amount already added.".to_string(),
+                    "Amount must be in multiples of out_unit".to_string(),
                 ));
             }
 
-            self.acquire_psp22(self.out_token, self.env().caller(), self.amount_for_sale)?;
-            self.amount_available_for_sale = self.amount_for_sale;
+            self.acquire_psp22(self.out_token, caller, amount)?;
 
             Ok(())
         }
 
         // === PRIVATE ===
+        fn authorise(allowed: AccountId, received: AccountId) -> Result<()> {
+            if allowed != received {
+                return Err(AZTokenSaleError::Unauthorised);
+            }
+
+            Ok(())
+        }
+
         fn acquire_psp22(&self, token: AccountId, from: AccountId, amount: Balance) -> Result<()> {
             PSP22Ref::transfer_from_builder(&token, from, self.env().account_id(), amount, vec![])
                 .call_flags(CallFlags::default())
@@ -128,30 +104,14 @@ mod az_token_sale {
         };
 
         // === CONSTANTS ===
-        const MOCK_FROM_AMOUNT: Balance = 250;
-        const MOCK_TO_AMOUNT: Balance = 1;
-        const MOCK_AMOUNT_FOR_SALE: Balance = 1_000_000_000_000_000_000;
-        const MOCK_START_BLOCK: BlockNumber = 2;
-        const MOCK_END_BLOCK: BlockNumber = 3;
-        // Monthly
-        const MOCK_LOCK_UP_RELEASE_BLOCK_FREQUENCY: BlockNumber = 60 * 60 * 24 * 30;
-        const MOCK_LOCK_UP_RELEASE_PERCENTAGE: u8 = 25;
+        const MOCK_IN_UNIT: Balance = 250;
+        const MOCK_OUT_UNIT: Balance = 1;
 
         // === HELPERS ===
         fn init() -> (DefaultAccounts<DefaultEnvironment>, AZTokenSale) {
             let accounts = default_accounts();
             set_caller::<DefaultEnvironment>(accounts.alice);
-            let token_sale = AZTokenSale::new(
-                None,
-                accounts.eve,
-                MOCK_FROM_AMOUNT,
-                MOCK_TO_AMOUNT,
-                MOCK_AMOUNT_FOR_SALE,
-                MOCK_START_BLOCK,
-                MOCK_END_BLOCK,
-                Some(MOCK_LOCK_UP_RELEASE_BLOCK_FREQUENCY),
-                Some(MOCK_LOCK_UP_RELEASE_PERCENTAGE),
-            );
+            let token_sale = AZTokenSale::new(None, accounts.eve, MOCK_IN_UNIT, MOCK_OUT_UNIT);
             (accounts, token_sale)
         }
 
@@ -162,26 +122,11 @@ mod az_token_sale {
             let (accounts, token_sale) = init();
             let config = token_sale.config();
             // * it returns the config
-            assert_eq!(config.creator, accounts.alice);
+            assert_eq!(config.admin, accounts.alice);
             assert_eq!(config.in_crypto, token_sale.in_crypto);
             assert_eq!(config.out_token, token_sale.out_token);
-            assert_eq!(config.amount_for_sale, token_sale.amount_for_sale);
-            assert_eq!(
-                config.amount_available_for_sale,
-                token_sale.amount_available_for_sale
-            );
-            assert_eq!(config.from_amount, token_sale.from_amount);
-            assert_eq!(config.to_amount, token_sale.to_amount);
-            assert_eq!(config.start_block, token_sale.start_block);
-            assert_eq!(config.end_block, token_sale.end_block);
-            assert_eq!(
-                config.lock_up_release_block_frequency,
-                token_sale.lock_up_release_block_frequency
-            );
-            assert_eq!(
-                config.lock_up_release_percentage,
-                token_sale.lock_up_release_percentage
-            );
+            assert_eq!(config.in_unit, token_sale.in_unit);
+            assert_eq!(config.out_unit, token_sale.out_unit);
         }
     }
 
@@ -194,14 +139,9 @@ mod az_token_sale {
         use openbrush::contracts::traits::psp22::psp22_external::PSP22;
 
         // === CONSTANTS ===
-        const MOCK_FROM_AMOUNT: Balance = 250;
-        const MOCK_TO_AMOUNT: Balance = 1;
-        const MOCK_AMOUNT_FOR_SALE: Balance = 1_000_000_000_000_000_000;
-        const MOCK_START_BLOCK: BlockNumber = 2;
-        const MOCK_END_BLOCK: BlockNumber = 3;
-        // Monthly
-        const MOCK_LOCK_UP_RELEASE_BLOCK_FREQUENCY: BlockNumber = 60 * 60 * 24 * 30;
-        const MOCK_LOCK_UP_RELEASE_PERCENTAGE: u8 = 25;
+        const MOCK_IN_UNIT: Balance = 250;
+        const MOCK_OUT_UNIT: Balance = 5;
+        const TOKEN_BALANCE: Balance = 1_000_000_000_000_000_000;
 
         // === TYPES ===
         type E2EResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -214,12 +154,10 @@ mod az_token_sale {
 
         // === TEST HANDLES ===
         #[ink_e2e::test]
-        async fn test_add_amount_for_sale_one(
-            mut client: ::ink_e2e::Client<C, E>,
-        ) -> E2EResult<()> {
+        async fn test_add_amount_for_sale(mut client: ::ink_e2e::Client<C, E>) -> E2EResult<()> {
             // Instantiate to token
             let to_token_constructor = ButtonRef::new(
-                MOCK_AMOUNT_FOR_SALE,
+                TOKEN_BALANCE,
                 Some("Button".to_string()),
                 Some("BTN".to_string()),
                 6,
@@ -237,17 +175,8 @@ mod az_token_sale {
                 .account_id;
             let mut current_block = 0;
             // Instantiate token sale for smart contract
-            let token_sale_constructor = AZTokenSaleRef::new(
-                None,
-                to_token_id,
-                MOCK_FROM_AMOUNT,
-                MOCK_TO_AMOUNT,
-                MOCK_AMOUNT_FOR_SALE,
-                MOCK_START_BLOCK,
-                MOCK_END_BLOCK,
-                Some(MOCK_LOCK_UP_RELEASE_BLOCK_FREQUENCY),
-                Some(MOCK_LOCK_UP_RELEASE_PERCENTAGE),
-            );
+            let token_sale_constructor =
+                AZTokenSaleRef::new(None, to_token_id, MOCK_IN_UNIT, MOCK_OUT_UNIT);
             let token_sale_id: AccountId = client
                 .instantiate(
                     "az_token_sale",
@@ -259,108 +188,21 @@ mod az_token_sale {
                 .await
                 .expect("AZ Token Sale instantiate failed")
                 .account_id;
-            current_block += 1;
-            // when current block is greater than or equal to start block
-            // * it does not add amount for sale
-            let add_amount_for_sale_message = build_message::<AZTokenSaleRef>(token_sale_id)
-                .call(|token_sale| token_sale.add_amount_for_sale());
-            let mut result = client
-                .call_dry_run(&ink_e2e::alice(), &add_amount_for_sale_message, 0, None)
-                .await
-                .return_value();
-            // = * it raises an error
-            assert_eq!(
-                result,
-                Err(AZTokenSaleError::UnprocessableEntity(
-                    "Token sale has already begun.".to_string()
-                ))
-            );
 
-            Ok(())
-        }
-
-        #[ink_e2e::test]
-        async fn test_add_amount_for_sale_two(
-            mut client: ::ink_e2e::Client<C, E>,
-        ) -> E2EResult<()> {
-            // Instantiate to token
-            let to_token_constructor = ButtonRef::new(
-                MOCK_AMOUNT_FOR_SALE,
-                Some("Button".to_string()),
-                Some("BTN".to_string()),
-                6,
-            );
-            let to_token_id: AccountId = client
-                .instantiate(
-                    "az_button",
-                    &ink_e2e::alice(),
-                    to_token_constructor,
-                    0,
-                    None,
-                )
-                .await
-                .expect("Reward token instantiate failed")
-                .account_id;
-            let mut current_block = 0;
-            // Instantiate token sale for smart contract
-            let token_sale_constructor = AZTokenSaleRef::new(
-                None,
-                to_token_id,
-                MOCK_FROM_AMOUNT,
-                MOCK_TO_AMOUNT,
-                MOCK_AMOUNT_FOR_SALE,
-                MOCK_START_BLOCK + 100,
-                MOCK_END_BLOCK,
-                Some(MOCK_LOCK_UP_RELEASE_BLOCK_FREQUENCY),
-                Some(MOCK_LOCK_UP_RELEASE_PERCENTAGE),
-            );
-            let token_sale_id: AccountId = client
-                .instantiate(
-                    "az_token_sale",
-                    &ink_e2e::alice(),
-                    token_sale_constructor,
-                    0,
-                    None,
-                )
-                .await
-                .expect("AZ Token Sale instantiate failed")
-                .account_id;
-            current_block += 1;
-            // Increase allowance for token sale
-            let increase_allowance_message = build_message::<ButtonRef>(to_token_id)
-                .call(|to_token| to_token.increase_allowance(token_sale_id, u128::MAX));
-            client
-                .call(&ink_e2e::alice(), increase_allowance_message, 0, None)
-                .await
-                .unwrap();
-            current_block += 1;
-            // when current block is less than start block
             let add_amount_for_sale_message = build_message::<AZTokenSaleRef>(token_sale_id)
-                .call(|token_sale| token_sale.add_amount_for_sale());
-            client
-                .call(&ink_e2e::alice(), add_amount_for_sale_message, 0, None)
-                .await
-                .unwrap();
-            // * it acquires the amount for sale
-            let balance_message = build_message::<ButtonRef>(to_token_id)
-                .call(|button| button.balance_of(token_sale_id));
-            let balance: Balance = client
-                .call_dry_run(&ink_e2e::alice(), &balance_message, 0, None)
+                .call(|token_sale| token_sale.add_amount_for_sale(TOKEN_BALANCE));
+            // when called by non-admin
+            // * it raises an error
+            let result = client
+                .call_dry_run(&ink_e2e::charlie(), &add_amount_for_sale_message, 0, None)
                 .await
                 .return_value();
-            assert_eq!(MOCK_AMOUNT_FOR_SALE, balance);
-            // * it sets the amount available for sale to amount for sale
-            let config_message = build_message::<AZTokenSaleRef>(token_sale_id)
-                .call(|token_sale| token_sale.config());
-            let config: Config = client
-                .call_dry_run(&ink_e2e::alice(), &config_message, 0, None)
-                .await
-                .return_value();
-            assert_eq!(MOCK_AMOUNT_FOR_SALE, config.amount_available_for_sale);
-            // = when amount for sale has already beed added
-            // = * it raises an error
+            assert_eq!(result, Err(AZTokenSaleError::Unauthorised));
+            // when called by admin
+            // = when amount added in is not divisible by out_unit
             let add_amount_for_sale_message = build_message::<AZTokenSaleRef>(token_sale_id)
-                .call(|token_sale| token_sale.add_amount_for_sale());
+                .call(|token_sale| token_sale.add_amount_for_sale(1));
+            // # it raises an error
             let result = client
                 .call_dry_run(&ink_e2e::alice(), &add_amount_for_sale_message, 0, None)
                 .await
@@ -368,9 +210,30 @@ mod az_token_sale {
             assert_eq!(
                 result,
                 Err(AZTokenSaleError::UnprocessableEntity(
-                    "Sale amount already added.".to_string()
+                    "Amount must be in multiples of out_unit".to_string()
                 ))
             );
+            // = when amount added in is divisible by out_unit
+            // = * it transfers the token from admin to itself
+            let increase_allowance_message = build_message::<ButtonRef>(to_token_id)
+                .call(|to_token| to_token.increase_allowance(token_sale_id, u128::MAX));
+            client
+                .call(&ink_e2e::alice(), increase_allowance_message, 0, None)
+                .await
+                .unwrap();
+            let add_amount_for_sale_message = build_message::<AZTokenSaleRef>(token_sale_id)
+                .call(|token_sale| token_sale.add_amount_for_sale(MOCK_OUT_UNIT));
+            client
+                .call(&ink_e2e::alice(), add_amount_for_sale_message, 0, None)
+                .await
+                .unwrap();
+            let balance_message = build_message::<ButtonRef>(to_token_id)
+                .call(|button| button.balance_of(token_sale_id));
+            let balance: Balance = client
+                .call_dry_run(&ink_e2e::alice(), &balance_message, 0, None)
+                .await
+                .return_value();
+            assert_eq!(MOCK_OUT_UNIT, balance);
 
             Ok(())
         }

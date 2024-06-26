@@ -11,6 +11,7 @@ pub enum AZTokenSaleError {
     ContractCall(LangError),
     InkEnvError(String),
     PSP22Error(PSP22Error),
+    Unauthorised,
     UnprocessableEntity(String),
 }
 impl From<InkEnvError> for AZTokenSaleError {

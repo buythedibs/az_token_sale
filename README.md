@@ -1,6 +1,6 @@
 # AZ Token Sale
 
-Toke sale smart contract for Aleph Zero. Comes with lock up functionality.
+Toke sale smart contract for Aleph Zero.
 
 ### Rules & notes
 
