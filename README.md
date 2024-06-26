@@ -1,6 +1,6 @@
 # AZ Token Sale
 
-Toke sale smart contract for Aleph Zero.
+Toke sale smart contract for Aleph Zero. Accepts AZERO for a token. No time limit or amount limits. Designed to sell at a certain rate as long as there are tokens in there.
 
 ### Rules & notes
 
